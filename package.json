@@ -1,0 +1,17 @@
+{
+  "name": "vaultmedia-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Proxy Node.js entre VaultMedia frontend y Google Apps Script",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js",
+    "dev": "node --watch proxy.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "node-fetch": "^3.3.2"
+  }
+}
