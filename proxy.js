@@ -4,18 +4,21 @@
 // Resuelve CORS, oculta la URL del Web App y centraliza el enrutamiento.
 //
 // Instalación:
-//   npm install express node-fetch dotenv cors
+//   npm install express node-fetch dotenv cors express-basic-auth
 //
 // Variables de entorno (.env):
 //   APPS_SCRIPT_URL=https://script.google.com/macros/s/TU_ID/exec
 //   PORT=3000
 //   ALLOWED_ORIGIN=http://localhost:5173   (o la URL de tu frontend)
+//   AUTH_USER=tu_usuario
+//   AUTH_PASS=tu_contraseña_segura
 // ════════════════════════════════════════════════════════════════════════
 
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
+import basicAuth from "express-basic-auth";
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -26,7 +29,25 @@ if (!GAS_URL) {
   process.exit(1);
 }
 
+const AUTH_USER = process.env.AUTH_USER;
+const AUTH_PASS = process.env.AUTH_PASS;
+
+if (!AUTH_USER || !AUTH_PASS) {
+  console.error("❌  Faltan AUTH_USER y/o AUTH_PASS en el archivo .env");
+  process.exit(1);
+}
+
 // ── Middleware ────────────────────────────────────────────────────────────────
+
+// HTTP Basic Auth — protege TODAS las rutas
+app.use(
+  basicAuth({
+    users: { [AUTH_USER]: AUTH_PASS },
+    challenge: true,           // fuerza el diálogo del navegador
+    realm: "VaultMedia",       // nombre que aparece en el diálogo
+  })
+);
+
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 app.use(express.json());
 

@@ -9,9 +9,10 @@
     "dev": "node --watch proxy.js"
   },
   "dependencies": {
-    "cors": "^2.8.6",
-    "dotenv": "^16.6.1",
-    "express": "^4.22.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-basic-auth": "^1.2.1",
     "node-fetch": "^3.3.2"
   }
 }
