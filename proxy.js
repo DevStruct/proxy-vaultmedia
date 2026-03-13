@@ -39,17 +39,25 @@ if (!AUTH_USER || !AUTH_PASS) {
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
-// HTTP Basic Auth — protege TODAS las rutas
+// CORS debe ir ANTES que Basic Auth para que los headers lleguen
+// al navegador incluso en respuestas 401 (preflight OPTIONS).
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGIN || "*",
+  credentials: true,   // necesario para que el navegador envíe el header Authorization
+};
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // responde OK a todos los preflight
+
+app.use(express.json());
+
+// HTTP Basic Auth — protege TODAS las rutas (después de CORS)
 app.use(
   basicAuth({
     users: { [AUTH_USER]: AUTH_PASS },
-    challenge: true,           // fuerza el diálogo del navegador
-    realm: "VaultMedia",       // nombre que aparece en el diálogo
+    challenge: true,       // fuerza el diálogo del navegador
+    realm: "VaultMedia",   // nombre que aparece en el diálogo
   })
 );
-
-app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
-app.use(express.json());
 
 // ── Logger mínimo ─────────────────────────────────────────────────────────────
 app.use((req, _res, next) => {
