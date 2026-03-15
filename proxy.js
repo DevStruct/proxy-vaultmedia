@@ -41,6 +41,12 @@ if (!AUTH_USER || !AUTH_PASS) {
 
 // CORS debe ir ANTES que Basic Auth para que los headers lleguen
 // al navegador incluso en respuestas 401 (preflight OPTIONS).
+// lista de orígenes permitidos
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
 const corsOptions = {
   origin: process.env.ALLOWED_ORIGIN || "*",
   credentials: true,   // necesario para que el navegador envíe el header Authorization
