@@ -3,22 +3,38 @@
 // Intermediario entre el frontend y Google Apps Script.
 // Resuelve CORS, oculta la URL del Web App y centraliza el enrutamiento.
 //
+// Autenticación: CLAVE + TOTP (Google Authenticator) → sesión en memoria.
+//
 // Instalación:
-//   npm install express node-fetch dotenv cors express-basic-auth
+//   npm install express node-fetch dotenv cors
+//   npm install -D qrcode-terminal   (solo para npm run enroll)
 //
 // Variables de entorno (.env):
 //   APPS_SCRIPT_URL=https://script.google.com/macros/s/TU_ID/exec
 //   PORT=3000
 //   ALLOWED_ORIGIN=http://localhost:5173   (o la URL de tu frontend)
-//   AUTH_USER=tu_usuario
-//   AUTH_PASS=tu_contraseña_segura
+//   AUTH_PASS=tu_clave_maestra_segura
+//   OTP_SECRET=secreto_base32_generado_con_npm_run_enroll
+// Opcionales:
+//   SESSION_TTL=10800          (milisegundos; 3 h por defecto)
+//   AUTH_MAX_ATTEMPTS=5        (fallos antes de bloquear)
+//   AUTH_BLOCK_MS=900000       (duración del bloqueo; 15 min por defecto)
 // ════════════════════════════════════════════════════════════════════════
 
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
-import basicAuth from "express-basic-auth";
+import {
+  safeEq,
+  verifyOtp,
+  createSession,
+  verifySession,
+  destroySession,
+  isBlocked,
+  registerFailure,
+  registerSuccess,
+} from "./auth.js";
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -29,17 +45,21 @@ if (!GAS_URL) {
   process.exit(1);
 }
 
-const AUTH_USER = process.env.AUTH_USER;
 const AUTH_PASS = process.env.AUTH_PASS;
+const OTP_SECRET = process.env.OTP_SECRET;
 
-if (!AUTH_USER || !AUTH_PASS) {
-  console.error("❌  Faltan AUTH_USER y/o AUTH_PASS en el archivo .env");
+if (!AUTH_PASS) {
+  console.error("❌  Falta AUTH_PASS en el archivo .env");
+  process.exit(1);
+}
+if (!OTP_SECRET) {
+  console.error("❌  Falta OTP_SECRET en el archivo .env (generalo con `npm run enroll`)");
   process.exit(1);
 }
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
-// CORS debe ir ANTES que Basic Auth para que los headers lleguen
+// CORS debe ir ANTES que la auth para que los headers lleguen
 // al navegador incluso en respuestas 401 (preflight OPTIONS).
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -57,7 +77,8 @@ const corsOptions = {
 
     return callback(new Error("Not allowed by CORS"));
   },
-  credentials: true, // necesario para que el navegador envíe el header Authorization
+  credentials: true, // cookie/session opcional (sin uso actual)
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 
 // CORS antes que auth
@@ -66,19 +87,64 @@ app.options("*", cors(corsOptions)); // responde OK a todos los preflight
 
 app.use(express.json());
 
-// HTTP Basic Auth — protege TODAS las rutas (después de CORS)
-app.use(
-  basicAuth({
-    users: { [AUTH_USER]: AUTH_PASS },
-    challenge: true,       // fuerza el diálogo del navegador
-    realm: "VaultMedia",   // nombre que aparece en el diálogo
-  })
-);
-
 // ── Logger mínimo ─────────────────────────────────────────────────────────────
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
+});
+
+// ── AUTH: POST /auth ──────────────────────────────────────────────────────────
+// { pass, otp } → verifica clave (constante-tiempo) + TOTP (ventana ±1),
+// y devuelve un token de sesión opaco con TTL.
+app.post("/auth", (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+
+  if (isBlocked(ip)) {
+    return err(res, 429, "Demasiados intentos. Intentalo en unos minutos.");
+  }
+
+  const { pass, otp } = req.body ?? {};
+  if (
+    typeof pass !== "string" ||
+    typeof otp !== "string" ||
+    !pass.length ||
+    !/^\d{6}$/.test(otp)
+  ) {
+    return err(res, 400, "Se requieren pass y un otp de 6 dígitos");
+  }
+
+  const passOk = safeEq(pass, AUTH_PASS);
+  const otpOk = verifyOtp(OTP_SECRET, otp, Date.now());
+
+  if (!passOk || !otpOk) {
+    registerFailure(ip);
+    return err(res, 401, "Clave o código incorrectos");
+  }
+
+  registerSuccess(ip);
+  const s = createSession();
+  res.json({ success: true, token: s.token, expiresIn: s.expiresIn });
+});
+
+// ── HEALTH CHECK (abierta: sin auth, para monitoreo) ──────────────────────────
+app.get("/health", (_req, res) => res.json({ ok: true, gas: GAS_URL.slice(0, 60) + "…" }));
+
+// ── Middleware de sesión: protege todas las rutas siguientes ─────────────────
+app.use((req, res, next) => {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token || !verifySession(token)) {
+    return err(res, 401, "Autenticación requerida");
+  }
+  next();
+});
+
+// ── POST /logout: invalida la sesión actual ──────────────────────────────────
+app.post("/logout", (req, res) => {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  destroySession(token);
+  res.json({ success: true });
 });
 
 // ════════════════════════════════════════════════════════════════════════
@@ -214,11 +280,6 @@ app.delete("/items/:id", async (req, res) => {
     err(res, 502, e.message);
   }
 });
-
-// ════════════════════════════════════════════════════════════════════════
-// HEALTH CHECK
-// ════════════════════════════════════════════════════════════════════════
-app.get("/health", (_req, res) => res.json({ ok: true, gas: GAS_URL.slice(0, 60) + "…" }));
 
 // ── 404 catch-all ─────────────────────────────────────────────────────────────
 app.use((_req, res) => err(res, 404, "Ruta no encontrada"));
