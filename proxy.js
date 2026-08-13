@@ -3,7 +3,7 @@
 // Intermediario entre el frontend y Google Apps Script.
 // Resuelve CORS, oculta la URL del Web App y centraliza el enrutamiento.
 //
-// Autenticación: CLAVE + TOTP (Google Authenticator) → sesión en memoria.
+// Autenticación: CLAVE + TOTP (Google Authenticator) → token firmado sin estado.
 //
 // Instalación:
 //   npm install express node-fetch dotenv cors
@@ -15,6 +15,7 @@
 //   ALLOWED_ORIGIN=http://localhost:5173   (o la URL de tu frontend)
 //   AUTH_PASS=tu_clave_maestra_segura
 //   OTP_SECRET=secreto_base32_generado_con_npm_run_enroll
+//   SESSION_SECRET=clave_aleatoria_de_firma_de_tokens
 // Opcionales:
 //   SESSION_TTL=10800          (milisegundos; 3 h por defecto)
 //   AUTH_MAX_ATTEMPTS=5        (fallos antes de bloquear)
@@ -54,6 +55,10 @@ if (!AUTH_PASS) {
 }
 if (!OTP_SECRET) {
   console.error("❌  Falta OTP_SECRET en el archivo .env (generalo con `npm run enroll`)");
+  process.exit(1);
+}
+if (!process.env.SESSION_SECRET) {
+  console.error("❌  Falta SESSION_SECRET en el archivo .env (clave de firma de tokens)");
   process.exit(1);
 }
 

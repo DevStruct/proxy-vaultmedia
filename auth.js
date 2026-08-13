@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════
-// AUTH — TOTP (RFC 6238) + sesiones en memoria + rate-limit
+// AUTH — TOTP (RFC 6238) + tokens firmados sin estado + rate-limit
 // Sin dependencias de runtime: solo crypto nativo de Node.
 // ════════════════════════════════════════════════════════════════════════
 import crypto from "node:crypto";
@@ -72,39 +72,53 @@ export function verifyOtp(secretB32, code, nowMs = Date.now()) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// SESIONES (en memoria) — token opaco + expiración
+// SESIONES (sin estado) — token firmado HMAC-SHA256 con expiración.
+// Sobrevive reinicios de instancia (Render): no hay estado en memoria.
 // ════════════════════════════════════════════════════════════════════════
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL) || 3 * 60 * 60 * 1000;
-const sessions = new Map();
+const SESSION_SECRET = process.env.SESSION_SECRET;
 
-function purgeExpired() {
-  const now = Date.now();
-  for (const [token, exp] of sessions) {
-    if (exp <= now) sessions.delete(token);
-  }
+function b64url(buf) {
+  return Buffer.from(buf).toString("base64url");
 }
 
-/** Crea una sesión nueva. El token es opaco: no hay clave de firma que forjar. */
+function sign(payloadB64) {
+  // Si falta SESSION_SECRET la validación en proxy.js aborta el arranque;
+  // este guard evita un crash intermedio.
+  if (!SESSION_SECRET) return "";
+  return crypto.createHmac("sha256", SESSION_SECRET).update(payloadB64).digest("base64url");
+}
+
+/** Crea un token de sesión firmado con expiración (sin estado en servidor). */
 export function createSession() {
-  purgeExpired();
-  const token = crypto.randomBytes(32).toString("hex");
-  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  const exp = Date.now() + SESSION_TTL_MS;
+  const payload = b64url(JSON.stringify({ exp }));
+  const token = `${payload}.${sign(payload)}`;
   return { token, expiresIn: Math.floor(SESSION_TTL_MS / 1000) };
 }
 
+/** Verifica firma (tiempo-constante) y expiración del token. */
 export function verifySession(token) {
   if (!token || typeof token !== "string") return false;
-  const exp = sessions.get(token);
-  if (!exp) return false;
-  if (Date.now() > exp) {
-    sessions.delete(token);
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0 || dot === token.length - 1) return false;
+  const payload = token.slice(0, dot);
+  const signature = token.slice(dot + 1);
+  if (!safeEq(sign(payload), signature)) return false;
+  try {
+    const { exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return typeof exp === "number" && exp > Date.now();
+  } catch {
     return false;
   }
-  return true;
 }
 
-export function destroySession(token) {
-  if (token) sessions.delete(token);
+/**
+ * Logout en cliente (tokens sin estado): no hay nada que invalidar en el servidor.
+ * Se conserva la firma para no tocar proxy.js.
+ */
+export function destroySession(_token) {
+  /* sin estado: no-op */
 }
 
 // ════════════════════════════════════════════════════════════════════════
