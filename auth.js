@@ -75,7 +75,7 @@ export function verifyOtp(secretB32, code, nowMs = Date.now()) {
 // SESIONES (sin estado) — token firmado HMAC-SHA256 con expiración.
 // Sobrevive reinicios de instancia (Render): no hay estado en memoria.
 // ════════════════════════════════════════════════════════════════════════
-const SESSION_TTL_MS = Number(process.env.SESSION_TTL) || 3 * 60 * 60 * 1000;
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL) || 30 * 60 * 1000;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 
 function b64url(buf) {
