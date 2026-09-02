@@ -1,27 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// VAULTMEDIA — PROXY NODE.JS
-// Intermediario entre el frontend y Google Apps Script.
-// Resuelve CORS, oculta la URL del Web App y centraliza el enrutamiento.
-//
-// Autenticación: CLAVE + TOTP (Google Authenticator) → token firmado sin estado.
-//
-// Instalación:
-//   npm install express node-fetch dotenv cors
-//   npm install -D qrcode-terminal   (solo para npm run enroll)
-//
-// Variables de entorno (.env):
-//   APPS_SCRIPT_URL=https://script.google.com/macros/s/TU_ID/exec
-//   PORT=3000
-//   ALLOWED_ORIGIN=http://localhost:5173   (o la URL de tu frontend)
-//   AUTH_PASS=tu_clave_maestra_segura
-//   OTP_SECRET=secreto_base32_generado_con_npm_run_enroll
-//   SESSION_SECRET=clave_aleatoria_de_firma_de_tokens
-// Opcionales:
-//   SESSION_TTL=10800          (milisegundos; 3 h por defecto)
-//   AUTH_MAX_ATTEMPTS=5        (fallos antes de bloquear)
-//   AUTH_BLOCK_MS=900000       (duración del bloqueo; 15 min por defecto)
-// ════════════════════════════════════════════════════════════════════════
-
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -46,13 +22,8 @@ if (!GAS_URL) {
   process.exit(1);
 }
 
-const AUTH_PASS = process.env.AUTH_PASS;
 const OTP_SECRET = process.env.OTP_SECRET;
 
-if (!AUTH_PASS) {
-  console.error("❌  Falta AUTH_PASS en el archivo .env");
-  process.exit(1);
-}
 if (!OTP_SECRET) {
   console.error("❌  Falta OTP_SECRET en el archivo .env (generalo con `npm run enroll`)");
   process.exit(1);
@@ -99,8 +70,7 @@ app.use((req, _res, next) => {
 });
 
 // ── AUTH: POST /auth ──────────────────────────────────────────────────────────
-// { pass, otp } → verifica clave (constante-tiempo) + TOTP (ventana ±1),
-// y devuelve un token de sesión opaco con TTL.
+// { otp } → verifica TOTP (ventana ±1) y devuelve token de sesión firmado.
 app.post("/auth", (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || "unknown";
 
@@ -108,22 +78,14 @@ app.post("/auth", (req, res) => {
     return err(res, 429, "Demasiados intentos. Intentalo en unos minutos.");
   }
 
-  const { pass, otp } = req.body ?? {};
-  if (
-    typeof pass !== "string" ||
-    typeof otp !== "string" ||
-    !pass.length ||
-    !/^\d{6}$/.test(otp)
-  ) {
-    return err(res, 400, "Se requieren pass y un otp de 6 dígitos");
+  const { otp } = req.body ?? {};
+  if (typeof otp !== "string" || !/^\d{6}$/.test(otp)) {
+    return err(res, 400, "Se requiere código OTP de 6 dígitos");
   }
 
-  const passOk = safeEq(pass, AUTH_PASS);
-  const otpOk = verifyOtp(OTP_SECRET, otp, Date.now());
-
-  if (!passOk || !otpOk) {
+  if (!verifyOtp(OTP_SECRET, otp, Date.now())) {
     registerFailure(ip);
-    return err(res, 401, "Clave o código incorrectos");
+    return err(res, 401, "Código incorrecto");
   }
 
   registerSuccess(ip);
